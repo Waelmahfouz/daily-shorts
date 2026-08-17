@@ -10,6 +10,7 @@ video still gets made.
 """
 
 import os
+import re
 import json
 import datetime
 import urllib.request
@@ -27,25 +28,37 @@ def read_niche() -> str:
         lines = []
     if not lines:
         return "interesting science facts"
-    # Rotate through multiple niches by day-of-year.
     day = datetime.date.today().timetuple().tm_yday
     return lines[day % len(lines)]
 
 
+def _extract_json(text: str) -> dict:
+    """Pull the first {...} JSON object out of a model reply."""
+    text = text.strip()
+    # Strip code fences if present.
+    text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.MULTILINE).strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if match:
+        return json.loads(match.group(0))
+    raise ValueError("no JSON object found in model reply")
+
+
 def ask_groq(niche: str, api_key: str) -> dict:
     today = datetime.date.today().isoformat()
-    system = (
-        "You are a short-form video producer. You output ONLY compact JSON."
-    )
+    system = "You are a short-form video producer. Reply with ONLY a compact JSON object."
     user = (
         f"Niche: {niche}\n"
         f"Today: {today}\n\n"
         "Propose ONE fresh, specific, engaging topic for a 30-60 second vertical "
         "short video in this niche. Avoid generic or repetitive angles. Then write "
         "a punchy title and a caption with 3-5 relevant hashtags.\n\n"
-        "Return ONLY this JSON, nothing else:\n"
-        '{"topic": "...", "title": "...", "caption": "..."}\n'
-        "Rules: topic <= 14 words; title <= 70 characters; caption <= 200 characters."
+        'Return ONLY this JSON: {"topic": "...", "title": "...", "caption": "..."}\n'
+        "Rules: topic <= 14 words; title <= 70 characters; caption <= 200 characters; "
+        "do not use the characters < or >."
     )
     body = json.dumps({
         "model": MODEL,
@@ -54,7 +67,6 @@ def ask_groq(niche: str, api_key: str) -> dict:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        "response_format": {"type": "json_object"},
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -69,12 +81,17 @@ def ask_groq(niche: str, api_key: str) -> dict:
     with urllib.request.urlopen(req, timeout=60) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     content = data["choices"][0]["message"]["content"]
-    return json.loads(content)
+    return _extract_json(content)
+
+
+def _clean(s: str) -> str:
+    # YouTube rejects < and > in title/description.
+    return (s or "").replace("<", "").replace(">", "").strip()
 
 
 def write_output(topic: str, title: str, caption: str) -> None:
     out_path = os.environ.get("GITHUB_OUTPUT")
-    fields = {"topic": topic, "title": title, "caption": caption}
+    fields = {"topic": _clean(topic), "title": _clean(title), "caption": _clean(caption)}
     if not out_path:
         print(json.dumps(fields, ensure_ascii=False))
         return
@@ -89,11 +106,8 @@ def main() -> None:
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
 
     if override:
-        topic = override
-        title = override
-        caption = f"{override}"
-        print(f"Using manual topic override: {topic}")
-        write_output(topic, title, caption)
+        print(f"Using manual topic override: {override}")
+        write_output(override, override, override)
         return
 
     try:
@@ -105,9 +119,7 @@ def main() -> None:
         print(f"Chosen topic: {topic}")
     except Exception as e:  # noqa: BLE001
         print(f"Topic generation failed ({e!r}); falling back to raw niche.")
-        topic = niche
-        title = niche
-        caption = niche
+        topic = title = caption = niche
 
     write_output(topic, title, caption)
 
