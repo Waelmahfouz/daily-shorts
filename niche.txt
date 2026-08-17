@@ -1,13 +1,4 @@
-# Your niche(s). Edit this file to change what your daily videos are about.
-# - Put ONE niche per line.
-# - If you list several lines, the system rotates through them day by day.
-# - Lines starting with # are ignored.
-#
-# Examples (delete these and write your own):
-#   amazing space and astronomy facts
-#   personal finance tips for beginners
-#   ancient history mysteries
-#   healthy 5-minute recipes
+# Your niche(s). One per line. Lines starting with # are ignored.
+# List several lines to rotate through them day by day.
 
-interesting science facts
-Space facts
+horror anime stories
