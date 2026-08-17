@@ -1,0 +1,121 @@
+name: Daily Short Video
+
+# Runs every day, plus a manual "Run workflow" button.
+on:
+  schedule:
+    # 06:00 UTC = 09:00 Beirut. Change the time if you like.
+    # (GitHub may start scheduled runs a few minutes late — that's normal.)
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      topic_override:
+        description: "Optional: force a specific topic for this run"
+        required: false
+        default: ""
+
+jobs:
+  make-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Pick today's topic
+        id: topic
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          TOPIC_OVERRIDE: ${{ github.event.inputs.topic_override }}
+        run: |
+          pip install --quiet requests
+          python scripts/pick_topic.py
+
+      - name: Write config.toml
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+        run: |
+          cat > config.toml <<EOF
+          log_level = "INFO"
+          listen_host = "0.0.0.0"
+          listen_port = 8080
+
+          [app]
+          video_source = "pexels"
+          pexels_api_keys = ["${PEXELS_API_KEY}"]
+          llm_provider = "groq"
+          groq_api_key = "${GROQ_API_KEY}"
+          groq_base_url = ""
+          groq_model_name = ""
+          subtitle_provider = "edge"
+          upload_post_enabled = false
+
+          [whisper]
+          model_size = "large-v3"
+          device = "cpu"
+          compute_type = "int8"
+
+          [ui]
+          hide_log = false
+          EOF
+          echo "config.toml written."
+
+      - name: Prepare output folders
+        run: |
+          mkdir -p storage out
+          chmod -R 777 storage out
+
+      - name: Generate the video
+        env:
+          TOPIC: ${{ steps.topic.outputs.topic }}
+        run: |
+          echo "Generating video for topic: $TOPIC"
+          docker run --rm \
+            -v "$PWD/config.toml:/MoneyPrinterTurbo/config.toml" \
+            -v "$PWD/storage:/MoneyPrinterTurbo/storage" \
+            ghcr.io/harry0703/moneyprinterturbo:latest \
+            python3 cli.py --video-subject "$TOPIC" --video-source pexels --video-aspect 9:16
+
+      - name: Collect the finished video
+        env:
+          TOPIC: ${{ steps.topic.outputs.topic }}
+          TITLE: ${{ steps.topic.outputs.title }}
+          CAPTION: ${{ steps.topic.outputs.caption }}
+        run: |
+          # Prefer files named final-*.mp4; fall back to the newest .mp4
+          found=$(find storage/tasks -type f -name "final-*.mp4" 2>/dev/null | sort)
+          if [ -z "$found" ]; then
+            found=$(find storage/tasks -type f -name "*.mp4" 2>/dev/null | xargs -r ls -t | head -1)
+          fi
+          if [ -z "$found" ]; then
+            echo "No video was produced — check the 'Generate the video' log above."
+            exit 1
+          fi
+          i=1
+          for f in $found; do
+            cp "$f" "out/video_${i}.mp4"
+            i=$((i+1))
+          done
+          {
+            echo "TOPIC: $TOPIC"
+            echo ""
+            echo "SUGGESTED TITLE:"
+            echo "$TITLE"
+            echo ""
+            echo "SUGGESTED CAPTION / DESCRIPTION:"
+            echo "$CAPTION"
+          } > out/post-text.txt
+          echo "Collected:"
+          ls -la out
+
+      - name: Upload video (download it from this run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-video-${{ github.run_number }}
+          path: out/
+          retention-days: 90
