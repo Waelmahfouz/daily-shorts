@@ -13,6 +13,9 @@ on:
         required: false
         default: ""
 
+permissions:
+  contents: write
+
 jobs:
   make-video:
     runs-on: ubuntu-latest
@@ -51,7 +54,7 @@ jobs:
           llm_provider = "groq"
           groq_api_key = "${GROQ_API_KEY}"
           groq_base_url = ""
-          groq_model_name = ""
+          groq_model_name = "openai/gpt-oss-20b"
           subtitle_provider = "edge"
           upload_post_enabled = false
 
@@ -119,3 +122,15 @@ jobs:
           name: daily-video-${{ github.run_number }}
           path: out/
           retention-days: 90
+
+      # Publish the newest video as the "latest" release so the auto-publisher
+      # (a scheduled Cowork task) can fetch it at a stable URL:
+      #   https://github.com/<you>/<repo>/releases/download/latest/video_1.mp4
+      - name: Publish 'latest' release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create latest ./out/* \
+            --title "Latest daily video" \
+            --notes "Newest auto-generated video. Topic: ${{ steps.topic.outputs.topic }}"
